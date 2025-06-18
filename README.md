@@ -1,4 +1,4 @@
-# Iconize Plugin for Obsidian
+# JS Iconize Plugin for Obsidian
 A simple plugin to add emoji or Lucide icons to your files and folders in Obsidian, helping you visually organize your vault.
 
 ## Features
