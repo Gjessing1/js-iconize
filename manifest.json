@@ -1,0 +1,9 @@
+{
+  "id": "js-iconize",
+  "name": "JS Iconize",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Adds icons to files and folders in the file explorer using JavaScript.",
+  "author": "Lars Gjessing",
+  "isDesktopOnly": false
+}
