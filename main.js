@@ -54,7 +54,7 @@ const EMOJI_DATA = {
   '📉': ['chart', 'decreasing', 'graph', 'trend', 'decline', 'analytics', 'down'],
   '📌': ['pushpin', 'pin', 'location', 'reminder', 'board', 'note', 'attach'],
   '🔥': ['fire', 'hot', 'lit', 'trend', 'flame', 'popular', 'amazing'],
-  '⭐': ['star', 'favorite', 'amazing', 'rating', 'yellow', 'quality'],
+  '⭐': ['star', 'favorite', 'amazing', 'rating', 'yellow', 'quality', 'night', 'sky', 'bright', 'space'],
   '🌟': ['glowing', 'star', 'sparkle', 'amazing', 'special', 'bright'],
   '✨': ['sparkles', 'magic', 'special', 'clean', 'shiny', 'new'],
   '🎉': ['party', 'popper', 'celebration', 'party', 'tada', 'congrats', 'confetti'],
@@ -137,7 +137,6 @@ const EMOJI_DATA = {
   '🚀': ['rocket', 'space', 'launch', 'nasa', 'fast', 'moon'],
   '☀️': ['sun', 'sunny', 'bright', 'hot', 'weather', 'day'],
   '🌙': ['crescent', 'moon', 'night', 'sleep', 'lunar', 'sky'],
-  '⭐': ['star', 'night', 'sky', 'bright', 'space', 'yellow'],
   '🌈': ['rainbow', 'colorful', 'weather', 'pride', 'arc', 'colors'],
   '⛅': ['partly', 'cloudy', 'sun', 'behind', 'cloud', 'weather'],
   '🌧️': ['rain', 'cloud', 'weather', 'water', 'drops', 'storm'],
@@ -145,38 +144,76 @@ const EMOJI_DATA = {
 };
 
 const DEFAULT_DATA = {
-  settings: {
-    recentlyUsedIcons: []
-  },
+  settings: { recentlyUsedIcons: [] },
 };
+
+// Renders a Lucide id, raw SVG markup, or emoji/text into an element
+function renderIcon(el, icon) {
+  if (icon.startsWith('lucide-')) {
+    obsidian.setIcon(el, icon.replace('lucide-', ''));
+  } else if (icon.trim().startsWith('<svg')) {
+    el.innerHTML = icon;
+  } else {
+    el.textContent = icon;
+  }
+}
+
+function searchEmojis(query) {
+  const queryWords = query.toLowerCase().split(' ').filter(w => w.length > 0);
+  if (queryWords.length === 0) return [];
+  const results = [];
+
+  for (const [emoji, keywords] of Object.entries(EMOJI_DATA)) {
+    const allWordsMatch = queryWords.every(word =>
+      keywords.some(keyword => keyword.includes(word))
+    );
+    if (!allWordsMatch) continue;
+
+    let score = 0;
+    queryWords.forEach(word => {
+      keywords.forEach(keyword => {
+        if (keyword === word) score += 10;
+        else if (keyword.startsWith(word)) score += 5;
+        else if (keyword.includes(word)) score += 1;
+      });
+    });
+    results.push({ emoji, score });
+  }
+
+  return results.sort((a, b) => b.score - a.score).map(result => result.emoji);
+}
 
 class IconizePlugin extends obsidian.Plugin {
   constructor(app, manifest) {
     super(app, manifest);
+    this.debounceTimer = null;
   }
 
-  async onload() {
-    console.log('Loading JS Iconize Plugin v1.4.1 (Bugfixes)');
+  onload() {
+    this.addSettingTab(new IconizeSettingTab(this.app, this));
+    this.app.workspace.onLayoutReady(this.initialize.bind(this));
+  }
 
+  async initialize() {
     await this.loadPluginData();
 
     this.updateAllIcons = () => {
       try {
         const fileExplorerNodes = this.app.workspace.containerEl.querySelectorAll(
-          '.nav-file-title, .nav-folder-title'
+          '.nav-files-container .nav-file-title, .nav-files-container .nav-folder-title'
         );
+
         fileExplorerNodes.forEach((node) => {
           const path = node.dataset.path;
-          const iconIdentifier = this.iconData[path];
-          const titleContent = node.querySelector('.nav-file-title-content, .nav-folder-title-content');
-          if (!titleContent) return;
-          
-          const existingIconEl = titleContent.querySelector('.iconize-icon');
+          if (!path) return;
 
-          if (iconIdentifier) {
-            if (!existingIconEl || existingIconEl.dataset.icon !== iconIdentifier) {
-                if(existingIconEl) existingIconEl.remove();
-                this.createIconElement(titleContent, iconIdentifier);
+          const existingIconEl = node.querySelector('.iconize-icon');
+          const desiredIcon = this.iconData[path];
+
+          if (desiredIcon) {
+            if (!existingIconEl || existingIconEl.dataset.icon !== desiredIcon) {
+              if (existingIconEl) existingIconEl.remove();
+              this.createIconElement(node, desiredIcon);
             }
           } else if (existingIconEl) {
             existingIconEl.remove();
@@ -187,7 +224,12 @@ class IconizePlugin extends obsidian.Plugin {
       }
     };
 
-    this.observer = new MutationObserver(this.updateAllIcons);
+    const debouncedUpdate = () => {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => this.updateAllIcons(), 50);
+    };
+
+    this.observer = new MutationObserver(debouncedUpdate);
     this.observer.observe(this.app.workspace.containerEl, {
       childList: true,
       subtree: true,
@@ -199,7 +241,7 @@ class IconizePlugin extends obsidian.Plugin {
           item
             .setTitle("Change icon")
             .setIcon("hashtag")
-            .onClick(async () => {
+            .onClick(() => {
               new IconPickerModal(this.app, this, file, (newIcon) => {
                 this.updateIcon(file.path, newIcon);
               }).open();
@@ -207,9 +249,19 @@ class IconizePlugin extends obsidian.Plugin {
         });
       })
     );
-
-    this.addSettingTab(new IconizeSettingTab(this.app, this));
-    this.app.workspace.onLayoutReady(this.updateAllIcons);
+    
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        if (this.iconData[oldPath]) {
+          const icon = this.iconData[oldPath];
+          delete this.iconData[oldPath];
+          this.iconData[file.path] = icon;
+          this.savePluginData();
+        }
+      })
+    );
+    
+    this.updateAllIcons();
   }
 
   onunload() {
@@ -219,23 +271,14 @@ class IconizePlugin extends obsidian.Plugin {
   createIconElement(parentEl, iconIdentifier) {
     const iconEl = createEl('div', { cls: 'iconize-icon' });
     iconEl.dataset.icon = iconIdentifier;
-
-    if (iconIdentifier.startsWith('lucide-')) {
-      obsidian.setIcon(iconEl, iconIdentifier);
-    } else if (iconIdentifier.trim().startsWith('<svg')) {
-      iconEl.innerHTML = iconIdentifier;
-    } else {
-      iconEl.textContent = iconIdentifier;
-    }
-
+    renderIcon(iconEl, iconIdentifier);
     parentEl.prepend(iconEl);
   }
 
   async updateIcon(path, newIcon) {
       if (newIcon && newIcon.trim() !== '') {
-        const trimmedIcon = newIcon.trim();
-        this.iconData[path] = trimmedIcon;
-        this.addRecentIcon(trimmedIcon);
+        this.iconData[path] = newIcon.trim();
+        this.addRecentIcon(newIcon.trim());
       } else {
         delete this.iconData[path];
       }
@@ -246,20 +289,14 @@ class IconizePlugin extends obsidian.Plugin {
   addRecentIcon(icon) {
       const recents = this.iconData.settings.recentlyUsedIcons || [];
       const index = recents.indexOf(icon);
-      if (index !== -1) {
-          recents.splice(index, 1);
-      }
+      if (index !== -1) recents.splice(index, 1);
       recents.unshift(icon);
       this.iconData.settings.recentlyUsedIcons = recents.slice(0, 10);
   }
 
   async loadPluginData() {
-    this.iconData = structuredClone(DEFAULT_DATA);
-    const loadedData = await this.loadData();
-    if (loadedData) {
-        this.iconData = Object.assign(this.iconData, loadedData);
-        this.iconData.settings = Object.assign({}, DEFAULT_DATA.settings, this.iconData.settings);
-    }
+    this.iconData = { ...DEFAULT_DATA, ...(await this.loadData()) };
+    this.iconData.settings = { ...DEFAULT_DATA.settings, ...this.iconData.settings };
   }
 
   async savePluginData() {
@@ -268,144 +305,98 @@ class IconizePlugin extends obsidian.Plugin {
 }
 
 class IconPickerModal extends obsidian.Modal {
-  constructor(app, plugin, file, callback) {
-    super(app);
-    this.plugin = plugin;
-    this.file = file;
-    this.callback = callback;
-  }
-
-  createFragmentWithHTML(html) {
-    const fragment = document.createDocumentFragment();
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    while (div.firstChild) {
-      fragment.appendChild(div.firstChild);
+    constructor(app, plugin, file, callback) {
+        super(app);
+        this.plugin = plugin;
+        this.file = file;
+        this.callback = callback;
+        this.lucideIds = obsidian.getIconIds();
     }
-    return fragment;
-  }
 
-  searchEmojis(query) {
-      const lowerCaseQuery = query.toLowerCase();
-      const queryWords = lowerCaseQuery.split(' ').filter(w => w.length > 0);
-      const results = [];
-      
-      for (const [emoji, keywords] of Object.entries(EMOJI_DATA)) {
-        const allWordsMatch = queryWords.every(word => 
-          keywords.some(keyword => keyword.includes(word))
-        );
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl("h2", { text: `Set icon for: ${this.file.name}` });
         
-        if (allWordsMatch) {
-          let score = 0;
-          queryWords.forEach(word => {
-            keywords.forEach(keyword => {
-              if (keyword === word) score += 10;
-              else if (keyword.startsWith(word)) score += 5;
-              else if (keyword.includes(word)) score += 1;
-            });
-          });
-          results.push({ emoji, score });
-        }
-      }
-      
-      return results
-        .sort((a, b) => b.score - a.score)
-        .map(result => result.emoji);
-  }
-
-  searchIcons(query) {
-    const searchResultsEl = this.contentEl.querySelector('.iconize-search-results');
-    if (!searchResultsEl) return;
-    searchResultsEl.empty();
-    
-    if (!query || query.length < 2) return;
-
-    const lowerCaseQuery = query.toLowerCase();
-    
-    const lucideResults = obsidian.getIconIds()
-        .filter(iconId => iconId.startsWith('lucide-') && iconId.toLowerCase().includes(lowerCaseQuery));
-
-    const emojiResults = this.searchEmojis(query);
-    
-    const uniqueResults = [...new Set([...lucideResults, ...emojiResults])];
-
-    for (const icon of uniqueResults.slice(0, 100)) {
-        const btn = searchResultsEl.createEl('button', { cls: 'iconize-result-button' });
-        
-        if (icon.startsWith('lucide-')) {
-            obsidian.setIcon(btn, icon);
-        } else {
-            btn.textContent = icon;
-        }
-        
-        btn.onclick = () => {
-            this.callback(icon);
-            this.close();
-        };
-    }
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: `Set icon for: ${this.file.name}` });
-
-    contentEl.createEl("p", { text: "Recently used:" });
-    const recentContainer = contentEl.createDiv();
-    const recents = this.plugin.iconData.settings.recentlyUsedIcons || [];
-    recents.forEach(icon => {
-        const btn = recentContainer.createEl("button", { cls: 'iconize-recent-button' });
-        btn.style.margin = '5px';
-        btn.style.fontSize = '18px';
-        
-        if (icon.startsWith('lucide-')) {
-            obsidian.setIcon(btn, icon);
-        } else {
-            btn.textContent = icon;
-        }
-        
-        btn.onclick = () => {
-            this.callback(icon);
-            this.close();
-        };
-    });
-
-    new obsidian.Setting(contentEl)
-      .setName("Search for icon")
-      .setDesc(this.createFragmentWithHTML(
-          `Search for a Lucide icon or emoji by its name.<br><br>
-           <b>Tip:</b> For a complete emoji list, use the native picker: <br>
-           &nbsp;&nbsp;•&nbsp;&nbsp;<b>Windows:</b> <code>Windows Key</code> + <code>.</code> <br>
-           &nbsp;&nbsp;•&nbsp;&nbsp;<b>macOS:</b> <code>Control</code> + <code>Command</code> + <code>Space</code>`
-      ))
-      .addText((text) => {
-        text.inputEl.oninput = () => this.searchIcons(text.getValue());
-
-        text.inputEl.onkeydown = (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault(); 
-                this.callback(text.getValue());
+        let textInput;
+        new obsidian.Setting(contentEl)
+            .setName("Paste Emoji or Icon Name")
+            .addText((text) => {
+                textInput = text;
+                text.setPlaceholder('e.g., ✨ or lucide-star');
+                text.inputEl.onkeydown = (e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        this.callback(text.getValue());
+                        this.close();
+                    }
+                };
+            })
+            .addButton(button => button.setButtonText('Set Icon').onClick(() => {
+                this.callback(textInput.getValue());
                 this.close();
-            }
-        };
-      });
-      
-    contentEl.createDiv({ cls: 'iconize-search-results' });
-
-    new obsidian.Setting(contentEl)
-        .addButton((btn) =>
-            btn
-            .setButtonText("Remove Icon")
-            .onClick(() => {
+            }))
+            .addButton(button => button.setButtonText('Remove Icon').setWarning().onClick(() => {
                 this.callback('');
                 this.close();
-            })
-        );
-  }
+            }));
 
-  onClose() {
-    this.contentEl.empty();
-  }
+        // Display recently used icons
+        const recents = this.plugin.iconData.settings.recentlyUsedIcons || [];
+        if (recents.length > 0) {
+            contentEl.createEl('h3', { text: 'Recently Used' });
+            const recentContainer = contentEl.createDiv({ cls: 'iconize-search-results' });
+            recents.forEach(icon => {
+                const btn = recentContainer.createEl('button', { cls: 'iconize-result-button' });
+                btn.onclick = () => {
+                    this.callback(icon);
+                    this.close();
+                };
+                renderIcon(btn, icon);
+            });
+        }
+
+        // Search for emojis and Lucide icons
+        contentEl.createEl('h3', { text: 'Search Emojis & Lucide Icons' });
+        const searchInput = new obsidian.TextComponent(contentEl);
+        searchInput.inputEl.addClass('iconize-search-input');
+        searchInput.setPlaceholder('Search for an icon or emoji...');
+
+        const resultsContainer = contentEl.createDiv({ cls: 'iconize-search-results' });
+
+        const displayIcons = (filter = '') => {
+            resultsContainer.empty();
+
+            searchEmojis(filter).forEach(emoji => {
+                const btn = resultsContainer.createEl('button', { cls: 'iconize-result-button', text: emoji });
+                btn.onclick = () => {
+                    this.callback(emoji);
+                    this.close();
+                };
+            });
+
+            const filteredIcons = this.lucideIds.filter(id => id.toLowerCase().includes(filter.toLowerCase()));
+
+            // ✨ FIX: Removed the slice(0, 100) to show all matching icons.
+            filteredIcons.forEach(iconId => {
+                const btn = resultsContainer.createEl('button', { cls: 'iconize-result-button' });
+                obsidian.setIcon(btn, iconId);
+                btn.onclick = () => {
+                    this.callback(iconId.startsWith('lucide-') ? iconId : `lucide-${iconId}`);
+                    this.close();
+                };
+            });
+        }
+
+        searchInput.onChange(displayIcons);
+        displayIcons(''); // Initial display
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
 }
+
 
 class IconizeSettingTab extends obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -417,20 +408,13 @@ class IconizeSettingTab extends obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl('h2', { text: 'Iconize Settings' });
-
     new obsidian.Setting(containerEl)
         .setName('Clear recent icons')
-        .setDesc('This will clear the list of recently used icons shown in the picker.')
-        .addButton(button => {
-            button
-                .setButtonText('Clear')
-                .setWarning()
-                .onClick(() => {
-                    this.plugin.iconData.settings.recentlyUsedIcons = [];
-                    this.plugin.savePluginData();
-                    new obsidian.Notice('Recently used icons have been cleared.');
-                });
-        });
+        .addButton(button => button.setButtonText('Clear').setWarning().onClick(() => {
+            this.plugin.iconData.settings.recentlyUsedIcons = [];
+            this.plugin.savePluginData();
+            new obsidian.Notice('Recently used icons have been cleared.');
+        }));
   }
 }
 
